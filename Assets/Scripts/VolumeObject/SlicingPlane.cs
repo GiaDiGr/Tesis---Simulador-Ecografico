@@ -4,6 +4,7 @@ using System.Reflection;
 using UnityEngine;
 using UnityEngine.XR;
 using UnityEngine.UI;
+using TMPro;
 
 namespace UnityVolumeRendering
 {
@@ -20,7 +21,8 @@ namespace UnityVolumeRendering
             DynamicRange,
             Depth,
             Zoom,
-            Frequency
+            Frequency,
+            Focus
         }
 
         [Serializable]
@@ -54,6 +56,11 @@ namespace UnityVolumeRendering
         [SerializeField] private bool useSharedScreenPriority = true;
         [SerializeField] private bool defaultScreenSource = false;
 
+        [Header("Selección de transductor con botón Probe")]
+        [SerializeField] private bool includeInProbeCycle = true;
+        [SerializeField] private int probeOrder = 0;
+        [SerializeField] private string probeDisplayName = "";
+
         [Header("UI Sliders integrados")]
         [SerializeField] private bool manageUISlidersFromThisSlicingPlane = false;
 
@@ -71,6 +78,21 @@ namespace UnityVolumeRendering
         [SerializeField] private bool disableSelectedSliderWhenNoParameterSelected = true;
 
         private bool suppressSelectedParameterSliderCallback;
+
+        [Header("Labels automáticos de valores numéricos")]
+        [SerializeField] private bool updateNumericValueLabels = true;
+        [SerializeField] private bool autoFindNumericValueLabels = true;
+
+        [SerializeField] private TMP_Text gainValueLabel;
+        [SerializeField] private TMP_Text dynamicRangeValueLabel;
+        [SerializeField] private TMP_Text depthValueLabel;
+        [SerializeField] private TMP_Text zoomValueLabel;
+        [SerializeField] private TMP_Text frequencyValueLabel;
+        [SerializeField] private TMP_Text focusValueLabel;
+
+        [SerializeField] private TMP_Text[] tgcValueLabels = new TMP_Text[6];
+
+        private bool numericValueLabelsScanned = false;
 
         private static SlicingPlane activeScreenSource;
 
@@ -130,6 +152,11 @@ namespace UnityVolumeRendering
         public static bool IsFrequencySelected
         {
             get { return IsSelectedParameter(SelectedUltrasoundParameter.Frequency); }
+        }
+
+        public static bool IsFocusSelected
+        {
+            get { return IsSelectedParameter(SelectedUltrasoundParameter.Focus); }
         }
 
         private static bool IsSelectedParameter(SelectedUltrasoundParameter parameter)
@@ -211,6 +238,12 @@ namespace UnityVolumeRendering
         [SerializeField] private float frequencyStepMHz = 1.0f;
         [SerializeField] private float minFrequencyMHz = 2.0f;
         [SerializeField] private float maxFrequencyMHz = 15.0f;
+
+        [Header("Foco ecográfico")]
+        [SerializeField] private float focusDepthCm = 5.0f;
+        [SerializeField] private float focusStepCm = 0.5f;
+        [SerializeField] private float minFocusDepthCm = 1.0f;
+        [SerializeField] private float maxFocusDepthCm = 10.0f;
 
         [Header("Rango dinámico / Contraste")]
         [SerializeField] private float dynamicRange = 60.0f;
@@ -302,6 +335,8 @@ namespace UnityVolumeRendering
 
         private static readonly int PropFrequencyMHz = Shader.PropertyToID("_FrequencyMHz");
 
+        private static readonly int PropFocusDepthCm = Shader.PropertyToID("_FocusDepthCm");
+
         private static readonly int PropTGCEnabled = Shader.PropertyToID("_TGCEnabled");
         private static readonly int PropTGC0 = Shader.PropertyToID("_TGC0");
         private static readonly int PropTGC1 = Shader.PropertyToID("_TGC1");
@@ -355,8 +390,14 @@ namespace UnityVolumeRendering
             InitializePowerStateIfNeeded();
             RefreshAll();
 
-            if (defaultScreenSource || activeScreenSource == null)
+            if (defaultScreenSource)
+            {
                 SelectAsScreenSource();
+            }
+            else if (activeScreenSource == null)
+            {
+                EnsureDefaultScreenSourceSelected();
+            }
 
             InitializeIntegratedSliders();
             UpdateIntegratedSliders();
@@ -407,6 +448,8 @@ namespace UnityVolumeRendering
             UpdateAutoButtonsPowerStateIfNeeded();
 
             UpdateIntegratedSliders();
+
+            UpdateNumericValueLabels();
         }
 
         private void RefreshAll()
@@ -565,6 +608,8 @@ namespace UnityVolumeRendering
             gain = Mathf.Clamp(gain, minGain, maxGain);
 
             frequencyMHz = Mathf.Clamp(frequencyMHz, minFrequencyMHz, maxFrequencyMHz);
+
+            focusDepthCm = Mathf.Clamp(focusDepthCm, minFocusDepthCm, maxFocusDepthCm);
 
             tgc0 = Mathf.Clamp(tgc0, minTGC, maxTGC);
             tgc1 = Mathf.Clamp(tgc1, minTGC, maxTGC);
@@ -1020,11 +1065,6 @@ namespace UnityVolumeRendering
             return null;
         }
 
-        public void NotifyGrabbed()
-        {
-            SelectAsScreenSource();
-        }
-
         public void SelectAsScreenSource()
         {
             activeScreenSource = this;
@@ -1045,6 +1085,153 @@ namespace UnityVolumeRendering
             return activeScreenSource == this;
         }
 
+        public void PressProbe()
+        {
+            ToggleProbe();
+        }
+
+        public void ToggleProbe()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.ToggleProbe();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Probe"))
+                return;
+
+            List<SlicingPlane> sources = GetProbeSources();
+
+            if (sources.Count == 0)
+            {
+                Debug.LogWarning("Probe: no hay transductores registrados en el ciclo.");
+                return;
+            }
+
+            int currentIndex = sources.IndexOf(activeScreenSource);
+            int nextIndex = currentIndex < 0
+                ? 0
+                : (currentIndex + 1) % sources.Count;
+
+            SlicingPlane nextSource = sources[nextIndex];
+
+            if (nextSource == null)
+                return;
+
+            ClearSelectedParameterOnAllSlicingPlanes();
+            ClearZoomPanModeOnAllSlicingPlanes();
+
+            nextSource.SelectAsScreenSource();
+
+            Debug.Log("Transductor activo: " + nextSource.GetProbeDisplayName());
+        }
+
+        private static List<SlicingPlane> GetProbeSources()
+        {
+            SlicingPlane[] allSlicingPlanes = FindObjectsByType<SlicingPlane>(
+                FindObjectsInactive.Exclude,
+                FindObjectsSortMode.None
+            );
+
+            List<SlicingPlane> sources = new List<SlicingPlane>();
+
+            for (int i = 0; i < allSlicingPlanes.Length; i++)
+            {
+                SlicingPlane slicingPlane = allSlicingPlanes[i];
+
+                if (slicingPlane == null)
+                    continue;
+
+                if (!slicingPlane.enabled)
+                    continue;
+
+                if (!slicingPlane.gameObject.activeInHierarchy)
+                    continue;
+
+                if (!slicingPlane.includeInProbeCycle)
+                    continue;
+
+                sources.Add(slicingPlane);
+            }
+
+            sources.Sort(CompareProbeSources);
+
+            return sources;
+        }
+
+        private static int CompareProbeSources(SlicingPlane a, SlicingPlane b)
+        {
+            if (ReferenceEquals(a, b))
+                return 0;
+
+            if (a == null)
+                return 1;
+
+            if (b == null)
+                return -1;
+
+            int orderCompare = a.probeOrder.CompareTo(b.probeOrder);
+
+            if (orderCompare != 0)
+                return orderCompare;
+
+            return string.Compare(a.name, b.name, StringComparison.Ordinal);
+        }
+
+        private static SlicingPlane FindDefaultProbeSource()
+        {
+            List<SlicingPlane> sources = GetProbeSources();
+
+            for (int i = 0; i < sources.Count; i++)
+            {
+                if (sources[i] != null && sources[i].defaultScreenSource)
+                    return sources[i];
+            }
+
+            if (sources.Count > 0)
+                return sources[0];
+
+            return null;
+        }
+
+        private static void EnsureDefaultScreenSourceSelected()
+        {
+            if (activeScreenSource != null)
+                return;
+
+            SlicingPlane defaultSource = FindDefaultProbeSource();
+
+            if (defaultSource != null)
+                defaultSource.SelectAsScreenSource();
+        }
+
+        private static void ClearZoomPanModeOnAllSlicingPlanes()
+        {
+            SlicingPlane[] slicingPlanes = FindObjectsByType<SlicingPlane>(
+                FindObjectsInactive.Include,
+                FindObjectsSortMode.None
+            );
+
+            for (int i = 0; i < slicingPlanes.Length; i++)
+            {
+                if (slicingPlanes[i] == null)
+                    continue;
+
+                slicingPlanes[i].zoomPanModeActive = false;
+            }
+        }
+
+        private string GetProbeDisplayName()
+        {
+            if (!string.IsNullOrEmpty(probeDisplayName))
+                return probeDisplayName;
+
+            return name;
+        }
+
         private bool ShouldWriteToScreen()
         {
             if (screenRenderer == null || screenMaterial == null)
@@ -1060,7 +1247,7 @@ namespace UnityVolumeRendering
                 return true;
 
             if (activeScreenSource == null)
-                activeScreenSource = this;
+                EnsureDefaultScreenSourceSelected();
 
             return activeScreenSource == this;
         }
@@ -1255,6 +1442,9 @@ namespace UnityVolumeRendering
 
             ApplyPowerStateToScreenMaterials();
             ApplyAutoButtonsPowerStateToAllSlicingPlanes();
+
+            activeScreenSource = null;
+            EnsureDefaultScreenSourceSelected();
 
             if (activeScreenSource != null)
             {
@@ -2130,6 +2320,10 @@ namespace UnityVolumeRendering
             {
                 IncreaseFrequency();
             }
+            else if (selectedParameter == SelectedUltrasoundParameter.Focus)
+            {
+                IncreaseFocus();
+            }
         }
 
         public void DecreaseSelectedParameter()
@@ -2167,6 +2361,10 @@ namespace UnityVolumeRendering
             else if (selectedParameter == SelectedUltrasoundParameter.Frequency)
             {
                 DecreaseFrequency();
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.Focus)
+            {
+                DecreaseFocus();
             }
         }
 
@@ -2207,10 +2405,10 @@ namespace UnityVolumeRendering
         }
 
         public bool TryGetSelectedParameterSliderRange(
-    out float minValue,
-    out float maxValue,
-    out float currentValue
-)
+            out float minValue,
+            out float maxValue,
+            out float currentValue
+        )
         {
             SlicingPlane target = GetControlTarget();
 
@@ -2267,6 +2465,14 @@ namespace UnityVolumeRendering
                 return true;
             }
 
+            if (selectedParameter == SelectedUltrasoundParameter.Focus)
+            {
+                minValue = minFocusDepthCm;
+                maxValue = maxFocusDepthCm;
+                currentValue = focusDepthCm;
+                return true;
+            }
+
             return false;
         }
 
@@ -2306,6 +2512,10 @@ namespace UnityVolumeRendering
             else if (selectedParameter == SelectedUltrasoundParameter.Frequency)
             {
                 frequencyMHz = Mathf.Clamp(value, minFrequencyMHz, maxFrequencyMHz);
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.Focus)
+            {
+                focusDepthCm = Mathf.Clamp(value, minFocusDepthCm, maxFocusDepthCm);
             }
             else
             {
@@ -2348,6 +2558,95 @@ namespace UnityVolumeRendering
 
             selectedParameter = SelectedUltrasoundParameter.Frequency;
             Debug.Log("Parámetro seleccionado: Frecuencia");
+        }
+
+        public void SelectFocus()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SelectFocus();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Focus"))
+                return;
+
+            selectedParameter = SelectedUltrasoundParameter.Focus;
+            Debug.Log("Parámetro seleccionado: Foco");
+        }
+
+        public void IncreaseFocus()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.IncreaseFocus();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Focus +"))
+                return;
+
+            focusDepthCm = Mathf.Clamp(
+                focusDepthCm + focusStepCm,
+                minFocusDepthCm,
+                maxFocusDepthCm
+            );
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Foco aumentado: " + focusDepthCm + " cm");
+        }
+
+        public void DecreaseFocus()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.DecreaseFocus();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Focus -"))
+                return;
+
+            focusDepthCm = Mathf.Clamp(
+                focusDepthCm - focusStepCm,
+                minFocusDepthCm,
+                maxFocusDepthCm
+            );
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Foco disminuido: " + focusDepthCm + " cm");
+        }
+
+        public void SetFocusDepthCm(float newFocusDepthCm)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetFocusDepthCm(newFocusDepthCm);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set Focus Depth cm"))
+                return;
+
+            focusDepthCm = Mathf.Clamp(
+                newFocusDepthCm,
+                minFocusDepthCm,
+                maxFocusDepthCm
+            );
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Foco establecido: " + focusDepthCm + " cm");
         }
 
         public void IncreaseFrequency()
@@ -2810,6 +3109,8 @@ namespace UnityVolumeRendering
 
             if (!freezeActive && ShouldWriteToScreen() && screenMaterial != null)
                 ApplyUltrasoundParametersToMaterial(screenMaterial);
+
+            UpdateNumericValueLabels();
         }
 
         private void ApplyUltrasoundParametersToMaterial(Material mat)
@@ -2828,6 +3129,9 @@ namespace UnityVolumeRendering
 
             if (mat.HasProperty(PropFrequencyMHz))
                 mat.SetFloat(PropFrequencyMHz, frequencyMHz);
+
+            if (mat.HasProperty(PropFocusDepthCm))
+                mat.SetFloat(PropFocusDepthCm, focusDepthCm);
 
             if (mat.HasProperty(PropTGCEnabled))
                 mat.SetFloat(PropTGCEnabled, tgcEnabled ? 1.0f : 0.0f);
@@ -3137,6 +3441,359 @@ namespace UnityVolumeRendering
                 if (screenMaterial != null && screenMaterial != runtimeMaterial)
                     Destroy(screenMaterial);
             }
+        }
+
+        private void UpdateNumericValueLabels()
+        {
+            if (!updateNumericValueLabels)
+                return;
+
+            if (autoFindNumericValueLabels && !numericValueLabelsScanned)
+                ScanNumericValueLabels();
+
+            SlicingPlane target = GetControlTarget();
+
+            if (target == null)
+                target = this;
+
+            SetText(gainValueLabel, target.FormatGainValue());
+            SetText(dynamicRangeValueLabel, target.FormatDynamicRangeValue());
+            SetText(depthValueLabel, target.FormatDepthValue());
+            SetText(zoomValueLabel, target.FormatZoomValue());
+            SetText(frequencyValueLabel, target.FormatFrequencyValue());
+            SetText(focusValueLabel, target.FormatFocusValue());
+
+            EnsureTGCLabelArraySize();
+
+            SetText(tgcValueLabels[0], target.FormatTGCValue(target.tgc0));
+            SetText(tgcValueLabels[1], target.FormatTGCValue(target.tgc1));
+            SetText(tgcValueLabels[2], target.FormatTGCValue(target.tgc2));
+            SetText(tgcValueLabels[3], target.FormatTGCValue(target.tgc3));
+            SetText(tgcValueLabels[4], target.FormatTGCValue(target.tgc4));
+            SetText(tgcValueLabels[5], target.FormatTGCValue(target.tgc5));
+        }
+
+        private void ScanNumericValueLabels()
+        {
+            numericValueLabelsScanned = true;
+
+            ScanParameterValueLabels();
+            ScanTGCValueLabels();
+        }
+
+        private void ScanParameterValueLabels()
+        {
+            Transform root = ultrasoundButtonsRoot != null
+                ? ultrasoundButtonsRoot
+                : transform;
+
+            TMP_Text[] texts = root.GetComponentsInChildren<TMP_Text>(true);
+
+            for (int i = 0; i < texts.Length; i++)
+            {
+                TMP_Text text = texts[i];
+
+                if (text == null)
+                    continue;
+
+                string textName = NormalizeName(text.name);
+
+                if (!textName.Contains("valuelabel"))
+                    continue;
+
+                if (BelongsToSlider(text.transform))
+                    continue;
+
+                Transform buttonRoot = GetButtonRootUnderButtonsRoot(text.transform);
+
+                string searchName = buttonRoot != null
+                    ? GetHierarchyPath(buttonRoot)
+                    : GetHierarchyPath(text.transform);
+
+                searchName = NormalizeName(searchName);
+
+                if (searchName.Contains("freeze"))
+                    continue;
+
+                if (searchName.Contains("probe"))
+                    continue;
+
+                if (gainValueLabel == null && ContainsAny(searchName, "gain", "ganancia"))
+                {
+                    gainValueLabel = text;
+                    continue;
+                }
+
+                if (dynamicRangeValueLabel == null && ContainsAny(searchName, "dynamicrange", "dynamic", "rangodinamico", "rangodinámico", "dr"))
+                {
+                    dynamicRangeValueLabel = text;
+                    continue;
+                }
+
+                if (depthValueLabel == null && ContainsAny(searchName, "depth", "profundidad"))
+                {
+                    depthValueLabel = text;
+                    continue;
+                }
+
+                if (zoomValueLabel == null && searchName.Contains("zoom"))
+                {
+                    zoomValueLabel = text;
+                    continue;
+                }
+
+                if (frequencyValueLabel == null && ContainsAny(searchName, "frequency", "freq", "frecuencia"))
+                {
+                    frequencyValueLabel = text;
+                    continue;
+                }
+
+                if (focusValueLabel == null && ContainsAny(searchName, "focus", "foco"))
+                {
+                    focusValueLabel = text;
+                    continue;
+                }
+            }
+        }
+
+        private void ScanTGCValueLabels()
+        {
+            EnsureTGCLabelArraySize();
+
+            Transform root = slidersRoot != null
+                ? slidersRoot
+                : transform;
+
+            Slider[] sliders = root.GetComponentsInChildren<Slider>(true);
+
+            bool usesZeroBasedNames = UsesZeroBasedTGCNames(sliders);
+
+            int fallbackIndex = 0;
+
+            for (int i = 0; i < sliders.Length; i++)
+            {
+                Slider slider = sliders[i];
+
+                if (slider == null)
+                    continue;
+
+                if (slider == selectedParameterSlider)
+                    continue;
+
+                string path = NormalizeName(GetHierarchyPath(slider.transform));
+
+                if (!path.Contains("tgc"))
+                    continue;
+
+                int index = DetectTGCIndex(path, usesZeroBasedNames);
+
+                if (index < 0)
+                {
+                    index = fallbackIndex;
+                    fallbackIndex++;
+                }
+
+                if (index < 0 || index >= tgcValueLabels.Length)
+                    continue;
+
+                TMP_Text text = FindTextTMPChild(slider.transform);
+
+                if (text == null)
+                    continue;
+
+                tgcValueLabels[index] = text;
+            }
+        }
+
+        private bool UsesZeroBasedTGCNames(Slider[] sliders)
+        {
+            if (sliders == null)
+                return true;
+
+            for (int i = 0; i < sliders.Length; i++)
+            {
+                Slider slider = sliders[i];
+
+                if (slider == null)
+                    continue;
+
+                string path = NormalizeName(GetHierarchyPath(slider.transform));
+
+                if (path.Contains("tgc0"))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private int DetectTGCIndex(string normalizedName, bool usesZeroBasedNames)
+        {
+            if (string.IsNullOrEmpty(normalizedName))
+                return -1;
+
+            if (usesZeroBasedNames)
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    if (normalizedName.Contains("tgc" + i))
+                        return i;
+                }
+            }
+            else
+            {
+                for (int i = 0; i < 6; i++)
+                {
+                    if (normalizedName.Contains("tgc" + (i + 1)))
+                        return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private TMP_Text FindTextTMPChild(Transform root)
+        {
+            if (root == null)
+                return null;
+
+            TMP_Text[] texts = root.GetComponentsInChildren<TMP_Text>(true);
+
+            TMP_Text fallback = null;
+
+            for (int i = 0; i < texts.Length; i++)
+            {
+                TMP_Text text = texts[i];
+
+                if (text == null)
+                    continue;
+
+                if (text.transform == root)
+                    continue;
+
+                string name = NormalizeName(text.name);
+
+                if (name.Contains("texttmp"))
+                    return text;
+
+                if (name.Contains("text"))
+                    return text;
+
+                if (fallback == null)
+                    fallback = text;
+            }
+
+            return fallback;
+        }
+
+        private bool BelongsToSlider(Transform child)
+        {
+            if (child == null)
+                return false;
+
+            Slider slider = child.GetComponentInParent<Slider>(true);
+
+            return slider != null;
+        }
+
+        private void EnsureTGCLabelArraySize()
+        {
+            if (tgcValueLabels == null || tgcValueLabels.Length != 6)
+                tgcValueLabels = new TMP_Text[6];
+        }
+
+        private void SetText(TMP_Text label, string value)
+        {
+            if (label == null)
+                return;
+
+            label.text = value;
+        }
+
+        private string FormatGainValue()
+        {
+            return gain.ToString("0.0");
+        }
+
+        private string FormatDynamicRangeValue()
+        {
+            return dynamicRange.ToString("0") + " dB";
+        }
+
+        private string FormatDepthValue()
+        {
+            return Mathf.RoundToInt(depthVisible * 100.0f) + " %";
+        }
+
+        private string FormatZoomValue()
+        {
+            return "x" + zoom.ToString("0.0");
+        }
+
+        private string FormatFrequencyValue()
+        {
+            return frequencyMHz.ToString("0.#") + " MHz";
+        }
+
+        private string FormatFocusValue()
+        {
+            return focusDepthCm.ToString("0.#") + " cm";
+        }
+
+        private string FormatTGCValue(float value)
+        {
+            return value.ToString("0.00");
+        }
+
+        private string GetHierarchyPath(Transform target)
+        {
+            if (target == null)
+                return "";
+
+            string path = target.name;
+
+            Transform current = target.parent;
+
+            while (current != null)
+            {
+                path = current.name + "/" + path;
+                current = current.parent;
+            }
+
+            return path;
+        }
+
+        private string NormalizeName(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return "";
+
+            string result = value.ToLowerInvariant();
+
+            result = result.Replace(" ", "");
+            result = result.Replace("_", "");
+            result = result.Replace("-", "");
+            result = result.Replace("(", "");
+            result = result.Replace(")", "");
+            result = result.Replace("/", "");
+
+            return result;
+        }
+
+        private bool ContainsAny(string value, params string[] tokens)
+        {
+            if (string.IsNullOrEmpty(value))
+                return false;
+
+            for (int i = 0; i < tokens.Length; i++)
+            {
+                if (string.IsNullOrEmpty(tokens[i]))
+                    continue;
+
+                if (value.Contains(NormalizeName(tokens[i])))
+                    return true;
+            }
+
+            return false;
         }
     }
 }

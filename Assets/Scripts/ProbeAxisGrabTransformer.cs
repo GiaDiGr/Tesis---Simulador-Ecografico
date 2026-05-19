@@ -108,8 +108,6 @@ public class ProbeAnchorAxisGrabTransformer : MonoBehaviour, ITransformer
             ? grabbable.Transform
             : transform;
 
-        NotifySlicingPlane();
-
         Quaternion desiredRotation = GetDesiredProbeRotation(grabPose.rotation);
 
         if (grabAnchor != null && target != null && grabAnchor.IsChildOf(target))
@@ -395,16 +393,6 @@ public class ProbeAnchorAxisGrabTransformer : MonoBehaviour, ITransformer
         }
 
         return null;
-    }
-
-    private void NotifySlicingPlane()
-    {
-        if (slicingPlaneToNotify == null) return;
-
-        slicingPlaneToNotify.SendMessage(
-            "NotifyGrabbed",
-            SendMessageOptions.DontRequireReceiver
-        );
     }
 
     private void OnValidate()

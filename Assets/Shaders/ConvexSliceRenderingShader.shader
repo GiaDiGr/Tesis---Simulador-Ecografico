@@ -11,6 +11,11 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
 
         _Gain ("Gain", Float) = 1.0
         _FrequencyMHz ("Frequency MHz", Float) = 5.0
+        _FocusDepthCm ("Focus Depth cm", Float) = 5.0
+
+        _ResolutionEffectScale ("Resolution Effect Scale", Float) = 6.0
+        _FocusBeta ("Focus Beta", Float) = 8.0
+        _SignalThreshold ("Signal Threshold", Float) = 0.02
 
         _TGCEnabled ("TGC Enabled", Float) = 1.0
         _TGC0 ("TGC 0 Superficial", Float) = 1.0
@@ -61,22 +66,23 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
 
             #include "UnityCG.cginc"
 
-            // Atenuación
             #define TISSUE_ATTENUATION_DB_CM_MHZ 0.5f
             #define IMAGING_DEPTH_CM 10.0f
             #define ATTENUATION_VISUAL_SCALE 0.30f
 
-            // Resolución física
             #define SOUND_SPEED_CM_PER_US 0.154f
             #define IMAGE_WIDTH_CM 8.0f
             #define IMAGE_WIDTH_PX 512.0f
             #define IMAGE_HEIGHT_PX 512.0f
+
             #define APERTURE_DIAMETER_CM 2.5f
             #define PULSE_CYCLES_N 2.0f
+
             #define K_AXIAL 1.0f
             #define K_LATERAL 1.0f
-            #define MAX_SIGMA_AXIAL_PX 8.0f
-            #define MAX_SIGMA_LATERAL_PX 12.0f
+
+            #define MAX_SIGMA_AXIAL_PX 16.0f
+            #define MAX_SIGMA_LATERAL_PX 80.0f
 
             struct appdata
             {
@@ -97,6 +103,11 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
 
             float _Gain;
             float _FrequencyMHz;
+            float _FocusDepthCm;
+
+            float _ResolutionEffectScale;
+            float _FocusBeta;
+            float _SignalThreshold;
 
             float _TGCEnabled;
             float _TGC0;
@@ -135,15 +146,23 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
             v2f vert(appdata v)
             {
                 v2f o;
+
                 o.vertex = UnityObjectToClipPos(v.vertex);
                 o.uv = v.uv;
+
                 return o;
+            }
+
+            float GetSignalValue(float4 col)
+            {
+                return max(max(col.r, col.g), col.b);
             }
 
             float2 ApplyZoomToUV(float2 uv)
             {
                 float safeZoom = max(_Zoom, 1.0f);
                 float2 center = saturate(_ZoomCenter.xy);
+
                 return center + (uv - center) / safeZoom;
             }
 
@@ -251,16 +270,6 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
                 return saturate(attenuationGain);
             }
 
-            float Hash21(float2 p)
-            {
-                return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
-            }
-
-            float SignedNoise(float2 p)
-            {
-                return Hash21(p) * 2.0f - 1.0f;
-            }
-
             float GetWavelengthCm()
             {
                 float safeFrequencyMHz = max(_FrequencyMHz, 0.01f);
@@ -292,44 +301,43 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
                     IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX
                 );
 
+                float focusDepthCm = clamp(
+                    _FocusDepthCm,
+                    IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX,
+                    IMAGING_DEPTH_CM
+                );
+
                 float deltaXCm = IMAGE_WIDTH_CM / IMAGE_WIDTH_PX;
+
+                float normalizedDistanceFromFocus =
+                    (depthCm - focusDepthCm) /
+                    max(focusDepthCm, 0.0001f);
+
+                float focusFactor =
+                    1.0f +
+                    _FocusBeta *
+                    normalizedDistanceFromFocus *
+                    normalizedDistanceFromFocus;
 
                 float sigmaLateralPx =
                     K_LATERAL *
                     1.4f *
                     wavelengthCm *
-                    depthCm /
+                    depthCm *
+                    focusFactor /
                     (APERTURE_DIAMETER_CM * deltaXCm);
 
                 return clamp(sigmaLateralPx, 0.0f, MAX_SIGMA_LATERAL_PX);
             }
 
-            fixed4 SampleUltrasoundAtUV(float2 uv)
+            fixed4 SampleRawConvexAtPolar(
+                float radius,
+                float angle,
+                float innerRadius,
+                float outerRadius,
+                float halfAngle
+            )
             {
-                if (
-                    uv.x < 0.0f || uv.x > 1.0f ||
-                    uv.y < 0.0f || uv.y > 1.0f
-                )
-                {
-                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
-                }
-
-                float apexDist = _SectorApexDistanceAboveTop;
-                float innerRadius = _SectorInnerRadius;
-                float outerRadius = 1.0f + apexDist;
-
-                float halfAngle =
-                    _SectorAngleDegrees *
-                    0.5f *
-                    0.01745329252f;
-
-                float yFromApex = uv.y + apexDist;
-                float halfWidth = outerRadius * sin(halfAngle);
-                float xFromApex = (uv.x - 0.5f) * 2.0f * halfWidth;
-
-                float radius = length(float2(xFromApex, yFromApex));
-                float angle = atan2(xFromApex, yFromApex);
-
                 if (
                     abs(angle) > halfAngle ||
                     radius < innerRadius ||
@@ -351,60 +359,13 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
                 if (depth01 > _DepthVisible)
                     return float4(0.0f, 0.0f, 0.0f, 1.0f);
 
-                float tgcDepth01 = saturate(depth01 / max(_DepthVisible, 0.0001f));
+                float xFromApex =
+                    sin(angle) *
+                    radius;
 
-                float sigmaAxialPx = GetSigmaAxialPx();
-                float sigmaLateralPx = GetSigmaLateralPx(tgcDepth01);
-
-                float axialNoise = SignedNoise(
-                    uv * float2(173.0f, 251.0f) +
-                    float2(_FrequencyMHz * 7.13f, tgcDepth01 * 31.0f)
-                );
-
-                float lateralNoise = SignedNoise(
-                    uv * float2(241.0f, 139.0f) +
-                    float2(_FrequencyMHz * 11.71f, tgcDepth01 * 17.0f)
-                );
-
-                float axialJitterCm =
-                    axialNoise *
-                    sigmaAxialPx *
-                    (IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX);
-
-                float lateralJitterCm =
-                    lateralNoise *
-                    sigmaLateralPx *
-                    (IMAGE_WIDTH_CM / IMAGE_WIDTH_PX);
-
-                float depthCm = max(
-                    tgcDepth01 * IMAGING_DEPTH_CM,
-                    IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX
-                );
-
-                float angleJitter = lateralJitterCm / max(depthCm, 0.0001f);
-
-                float radiusJitter01 = axialJitterCm / IMAGING_DEPTH_CM;
-                float radiusJitter = radiusJitter01 * (outerRadius - innerRadius);
-
-                float jitteredRadius = clamp(
-                    radius + radiusJitter,
-                    innerRadius,
-                    outerRadius
-                );
-
-                float jitteredAngle = clamp(
-                    angle + angleJitter,
-                    -halfAngle,
-                    halfAngle
-                );
-
-                float jitteredXFromApex =
-                    sin(jitteredAngle) *
-                    jitteredRadius;
-
-                float jitteredYFromApex =
-                    cos(jitteredAngle) *
-                    jitteredRadius;
+                float yFromApex =
+                    cos(angle) *
+                    radius;
 
                 float flipX = 1.0f;
 
@@ -412,13 +373,13 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
                     flipX = -1.0f;
 
                 float localX =
-                    jitteredXFromApex *
+                    xFromApex *
                     flipX *
                     _SectorLocalXScale;
 
                 float localZ =
                     _SectorApexLocalZ -
-                    jitteredYFromApex *
+                    yFromApex *
                     _SectorLocalZScale;
 
                 float3 worldPoint = mul(
@@ -446,37 +407,193 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
 
                 float dataVal = tex3D(_DataTex, dataCoord).r;
 
+                if (dataVal <= _SignalThreshold)
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
                 float4 col = tex2D(
                     _TFTex,
                     float2(dataVal, 0.0f)
                 );
 
-                float signalValue = max(max(col.r, col.g), col.b);
-
-                if (signalValue <= 0.001f)
-                {
+                if (GetSignalValue(col) <= _SignalThreshold)
                     col.rgb = float3(0.0f, 0.0f, 0.0f);
-                }
-                else
-                {
-                    float frequencyAttenuation = GetFrequencyAttenuation(tgcDepth01);
-                    float tgcGain = GetTGCGain(tgcDepth01);
-
-                    col.rgb = saturate(
-                        col.rgb *
-                        frequencyAttenuation *
-                        tgcGain *
-                        _Gain
-                    );
-
-                    col.rgb = saturate(
-                        0.5f +
-                        _ContrastFromDynamicRange *
-                        (col.rgb - 0.5f)
-                    );
-                }
 
                 col.a = 1.0f;
+
+                return col;
+            }
+
+            void AddValidSample(
+                inout fixed4 accum,
+                inout float weightSum,
+                fixed4 sampleCol,
+                float weight
+            )
+            {
+                if (GetSignalValue(sampleCol) <= _SignalThreshold)
+                    return;
+
+                accum += sampleCol * weight;
+                weightSum += weight;
+            }
+
+            fixed4 SampleUltrasoundAtUV(float2 uv)
+            {
+                if (
+                    uv.x < 0.0f || uv.x > 1.0f ||
+                    uv.y < 0.0f || uv.y > 1.0f
+                )
+                {
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+                }
+
+                float apexDist = _SectorApexDistanceAboveTop;
+                float innerRadius = _SectorInnerRadius;
+                float outerRadius = 1.0f + apexDist;
+
+                float halfAngle =
+                    _SectorAngleDegrees *
+                    0.5f *
+                    0.01745329252f;
+
+                float yFromApex =
+                    uv.y +
+                    apexDist;
+
+                float halfWidth =
+                    outerRadius *
+                    sin(halfAngle);
+
+                float xFromApex =
+                    (uv.x - 0.5f) *
+                    2.0f *
+                    halfWidth;
+
+                float radius =
+                    length(float2(xFromApex, yFromApex));
+
+                float angle =
+                    atan2(xFromApex, yFromApex);
+
+                if (
+                    abs(angle) > halfAngle ||
+                    radius < innerRadius ||
+                    radius > outerRadius
+                )
+                {
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+                }
+
+                float radial01 =
+                    (radius - innerRadius) /
+                    (outerRadius - innerRadius);
+
+                float depth01 = radial01;
+
+                if (_InvertDepthAxis > 0.5f)
+                    depth01 = 1.0f - radial01;
+
+                if (depth01 > _DepthVisible)
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+                float tgcDepth01 = saturate(
+                    depth01 /
+                    max(_DepthVisible, 0.0001f)
+                );
+
+                fixed4 centerCol = SampleRawConvexAtPolar(
+                    radius,
+                    angle,
+                    innerRadius,
+                    outerRadius,
+                    halfAngle
+                );
+
+                if (GetSignalValue(centerCol) <= _SignalThreshold)
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+                float sigmaAxialPx = GetSigmaAxialPx();
+                float sigmaLateralPx = GetSigmaLateralPx(tgcDepth01);
+
+                float visualScale = max(_ResolutionEffectScale, 0.0f);
+
+                float axialOffsetCm =
+                    sigmaAxialPx *
+                    visualScale *
+                    (IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX);
+
+                float lateralOffsetCm =
+                    sigmaLateralPx *
+                    visualScale *
+                    (IMAGE_WIDTH_CM / IMAGE_WIDTH_PX);
+
+                float depthCm = max(
+                    tgcDepth01 * IMAGING_DEPTH_CM,
+                    IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX
+                );
+
+                float angleOffset =
+                    lateralOffsetCm /
+                    max(depthCm, 0.0001f);
+
+                angleOffset = clamp(
+                    angleOffset,
+                    0.0f,
+                    halfAngle * 0.50f
+                );
+
+                float radiusOffset01 =
+                    axialOffsetCm /
+                    IMAGING_DEPTH_CM;
+
+                float radiusOffset =
+                    radiusOffset01 *
+                    (outerRadius - innerRadius);
+
+                radiusOffset = clamp(
+                    radiusOffset,
+                    0.0f,
+                    (outerRadius - innerRadius) * 0.30f
+                );
+
+                fixed4 accum = fixed4(0.0f, 0.0f, 0.0f, 0.0f);
+                float weightSum = 0.0f;
+
+                AddValidSample(accum, weightSum, centerCol, 0.20f);
+
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius, angle + angleOffset, innerRadius, outerRadius, halfAngle), 0.12f);
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius, angle - angleOffset, innerRadius, outerRadius, halfAngle), 0.12f);
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius + radiusOffset, angle, innerRadius, outerRadius, halfAngle), 0.12f);
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius - radiusOffset, angle, innerRadius, outerRadius, halfAngle), 0.12f);
+
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius, angle + 2.0f * angleOffset, innerRadius, outerRadius, halfAngle), 0.08f);
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius, angle - 2.0f * angleOffset, innerRadius, outerRadius, halfAngle), 0.08f);
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius + 2.0f * radiusOffset, angle, innerRadius, outerRadius, halfAngle), 0.08f);
+                AddValidSample(accum, weightSum, SampleRawConvexAtPolar(radius - 2.0f * radiusOffset, angle, innerRadius, outerRadius, halfAngle), 0.08f);
+
+                fixed4 col = centerCol;
+
+                if (weightSum > 0.0001f)
+                    col = accum / weightSum;
+
+                float frequencyAttenuation = GetFrequencyAttenuation(tgcDepth01);
+                float tgcGain = GetTGCGain(tgcDepth01);
+
+                col.rgb = saturate(
+                    col.rgb *
+                    frequencyAttenuation *
+                    tgcGain *
+                    _Gain
+                );
+
+                col.rgb = saturate(
+                    0.5f +
+                    _ContrastFromDynamicRange *
+                    (col.rgb - 0.5f)
+                );
+
+                col.a = 1.0f;
+
                 return col;
             }
 
@@ -504,6 +621,7 @@ Shader "VolumeRendering/ConvexSectorSamplingShader"
                     );
 
                     fixed4 minimapColor = SampleUltrasoundAtUV(minimapUV);
+
                     minimapColor.rgb *= 0.65f;
 
                     if (IsZoomBoxBorder(minimapUV))

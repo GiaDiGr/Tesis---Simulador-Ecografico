@@ -11,6 +11,11 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
 
         _Gain ("Gain", Float) = 1.0
         _FrequencyMHz ("Frequency MHz", Float) = 5.0
+        _FocusDepthCm ("Focus Depth cm", Float) = 5.0
+
+        _ResolutionEffectScale ("Resolution Effect Scale", Float) = 6.0
+        _FocusBeta ("Focus Beta", Float) = 8.0
+        _SignalThreshold ("Signal Threshold", Float) = 0.02
 
         _TGCEnabled ("TGC Enabled", Float) = 1.0
         _TGC0 ("TGC 0 Superficial", Float) = 1.0
@@ -51,22 +56,23 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
 
             #include "UnityCG.cginc"
 
-            // Atenuación
             #define TISSUE_ATTENUATION_DB_CM_MHZ 0.5f
             #define IMAGING_DEPTH_CM 10.0f
             #define ATTENUATION_VISUAL_SCALE 0.30f
 
-            // Resolución física
             #define SOUND_SPEED_CM_PER_US 0.154f
             #define IMAGE_WIDTH_CM 8.0f
             #define IMAGE_WIDTH_PX 512.0f
             #define IMAGE_HEIGHT_PX 512.0f
+
             #define APERTURE_DIAMETER_CM 2.5f
             #define PULSE_CYCLES_N 2.0f
+
             #define K_AXIAL 1.0f
             #define K_LATERAL 1.0f
-            #define MAX_SIGMA_AXIAL_PX 8.0f
-            #define MAX_SIGMA_LATERAL_PX 12.0f
+
+            #define MAX_SIGMA_AXIAL_PX 16.0f
+            #define MAX_SIGMA_LATERAL_PX 80.0f
 
             struct appdata
             {
@@ -87,6 +93,11 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
 
             float _Gain;
             float _FrequencyMHz;
+            float _FocusDepthCm;
+
+            float _ResolutionEffectScale;
+            float _FocusBeta;
+            float _SignalThreshold;
 
             float _TGCEnabled;
             float _TGC0;
@@ -115,15 +126,23 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
             v2f vert(appdata v)
             {
                 v2f o;
+
                 o.vertex = UnityObjectToClipPos(v.vertex);
                 o.uv = v.uv;
+
                 return o;
+            }
+
+            float GetSignalValue(float4 col)
+            {
+                return max(max(col.r, col.g), col.b);
             }
 
             float2 ApplyZoomToUV(float2 uv)
             {
                 float safeZoom = max(_Zoom, 1.0f);
                 float2 center = saturate(_ZoomCenter.xy);
+
                 return center + (uv - center) / safeZoom;
             }
 
@@ -231,16 +250,6 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                 return saturate(attenuationGain);
             }
 
-            float Hash21(float2 p)
-            {
-                return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
-            }
-
-            float SignedNoise(float2 p)
-            {
-                return Hash21(p) * 2.0f - 1.0f;
-            }
-
             float GetWavelengthCm()
             {
                 float safeFrequencyMHz = max(_FrequencyMHz, 0.01f);
@@ -272,40 +281,36 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                     IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX
                 );
 
+                float focusDepthCm = clamp(
+                    _FocusDepthCm,
+                    IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX,
+                    IMAGING_DEPTH_CM
+                );
+
                 float deltaXCm = IMAGE_WIDTH_CM / IMAGE_WIDTH_PX;
+
+                float normalizedDistanceFromFocus =
+                    (depthCm - focusDepthCm) /
+                    max(focusDepthCm, 0.0001f);
+
+                float focusFactor =
+                    1.0f +
+                    _FocusBeta *
+                    normalizedDistanceFromFocus *
+                    normalizedDistanceFromFocus;
 
                 float sigmaLateralPx =
                     K_LATERAL *
                     1.4f *
                     wavelengthCm *
-                    depthCm /
+                    depthCm *
+                    focusFactor /
                     (APERTURE_DIAMETER_CM * deltaXCm);
 
                 return clamp(sigmaLateralPx, 0.0f, MAX_SIGMA_LATERAL_PX);
             }
 
-            float2 GetPhysicalResolutionJitterUV(float2 uv, float depth01)
-            {
-                float sigmaAxialPx = GetSigmaAxialPx();
-                float sigmaLateralPx = GetSigmaLateralPx(depth01);
-
-                float axialNoise = SignedNoise(
-                    uv * float2(173.0f, 251.0f) +
-                    float2(_FrequencyMHz * 7.13f, depth01 * 31.0f)
-                );
-
-                float lateralNoise = SignedNoise(
-                    uv * float2(241.0f, 139.0f) +
-                    float2(_FrequencyMHz * 11.71f, depth01 * 17.0f)
-                );
-
-                float axialUV = axialNoise * sigmaAxialPx / IMAGE_HEIGHT_PX;
-                float lateralUV = lateralNoise * sigmaLateralPx / IMAGE_WIDTH_PX;
-
-                return float2(lateralUV, axialUV);
-            }
-
-            fixed4 SampleLinearSliceAtUV(float2 uv)
+            fixed4 SampleRawLinearAtUV(float2 uv)
             {
                 if (
                     uv.x < 0.0f || uv.x > 1.0f ||
@@ -326,19 +331,10 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                     return float4(0.0f, 0.0f, 0.0f, 1.0f);
                 }
 
-                float tgcDepth01 = saturate(depthCoord / max(_DepthVisible, 0.0001f));
-
-                float2 resolutionJitterUV = GetPhysicalResolutionJitterUV(
-                    uv,
-                    tgcDepth01
-                );
-
-                float2 sampleUV = saturate(uv + resolutionJitterUV);
-
                 float3 localPlanePoint = float3(
-                    0.5f - sampleUV.x,
+                    0.5f - uv.x,
                     0.0f,
-                    0.5f - sampleUV.y
+                    0.5f - uv.y
                 );
 
                 float3 worldPoint = mul(
@@ -366,37 +362,120 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
 
                 float dataVal = tex3D(_DataTex, dataCoord).r;
 
+                if (dataVal <= _SignalThreshold)
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
                 float4 col = tex2D(
                     _TFTex,
                     float2(dataVal, 0.0f)
                 );
 
-                float signalValue = max(max(col.r, col.g), col.b);
-
-                if (signalValue <= 0.001f)
-                {
+                if (GetSignalValue(col) <= _SignalThreshold)
                     col.rgb = float3(0.0f, 0.0f, 0.0f);
-                }
-                else
-                {
-                    float frequencyAttenuation = GetFrequencyAttenuation(tgcDepth01);
-                    float tgcGain = GetTGCGain(tgcDepth01);
-
-                    col.rgb = saturate(
-                        col.rgb *
-                        frequencyAttenuation *
-                        tgcGain *
-                        _Gain
-                    );
-
-                    col.rgb = saturate(
-                        0.5f +
-                        _ContrastFromDynamicRange *
-                        (col.rgb - 0.5f)
-                    );
-                }
 
                 col.a = 1.0f;
+
+                return col;
+            }
+
+            void AddValidSample(
+                inout fixed4 accum,
+                inout float weightSum,
+                fixed4 sampleCol,
+                float weight
+            )
+            {
+                if (GetSignalValue(sampleCol) <= _SignalThreshold)
+                    return;
+
+                accum += sampleCol * weight;
+                weightSum += weight;
+            }
+
+            fixed4 SampleLinearSliceAtUV(float2 uv)
+            {
+                if (
+                    uv.x < 0.0f || uv.x > 1.0f ||
+                    uv.y < 0.0f || uv.y > 1.0f
+                )
+                {
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+                }
+
+                float depthCoord = lerp(
+                    uv.y,
+                    1.0f - uv.y,
+                    step(0.5f, _InvertDepthAxis)
+                );
+
+                if (depthCoord > _DepthVisible)
+                {
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+                }
+
+                float tgcDepth01 = saturate(
+                    depthCoord /
+                    max(_DepthVisible, 0.0001f)
+                );
+
+                fixed4 centerCol = SampleRawLinearAtUV(uv);
+
+                if (GetSignalValue(centerCol) <= _SignalThreshold)
+                    return float4(0.0f, 0.0f, 0.0f, 1.0f);
+
+                float sigmaAxialPx = GetSigmaAxialPx();
+                float sigmaLateralPx = GetSigmaLateralPx(tgcDepth01);
+
+                float visualScale = max(_ResolutionEffectScale, 0.0f);
+
+                float axialUV =
+                    sigmaAxialPx *
+                    visualScale /
+                    IMAGE_HEIGHT_PX;
+
+                float lateralUV =
+                    sigmaLateralPx *
+                    visualScale /
+                    IMAGE_WIDTH_PX;
+
+                fixed4 accum = fixed4(0.0f, 0.0f, 0.0f, 0.0f);
+                float weightSum = 0.0f;
+
+                AddValidSample(accum, weightSum, centerCol, 0.20f);
+
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv + float2(lateralUV, 0.0f)), 0.12f);
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv - float2(lateralUV, 0.0f)), 0.12f);
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv + float2(0.0f, axialUV)), 0.12f);
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv - float2(0.0f, axialUV)), 0.12f);
+
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv + float2(2.0f * lateralUV, 0.0f)), 0.08f);
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv - float2(2.0f * lateralUV, 0.0f)), 0.08f);
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv + float2(0.0f, 2.0f * axialUV)), 0.08f);
+                AddValidSample(accum, weightSum, SampleRawLinearAtUV(uv - float2(0.0f, 2.0f * axialUV)), 0.08f);
+
+                fixed4 col = centerCol;
+
+                if (weightSum > 0.0001f)
+                    col = accum / weightSum;
+
+                float frequencyAttenuation = GetFrequencyAttenuation(tgcDepth01);
+                float tgcGain = GetTGCGain(tgcDepth01);
+
+                col.rgb = saturate(
+                    col.rgb *
+                    frequencyAttenuation *
+                    tgcGain *
+                    _Gain
+                );
+
+                col.rgb = saturate(
+                    0.5f +
+                    _ContrastFromDynamicRange *
+                    (col.rgb - 0.5f)
+                );
+
+                col.a = 1.0f;
+
                 return col;
             }
 
@@ -424,6 +503,7 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                     );
 
                     fixed4 minimapColor = SampleLinearSliceAtUV(minimapUV);
+
                     minimapColor.rgb *= 0.65f;
 
                     if (IsZoomBoxBorder(minimapUV))

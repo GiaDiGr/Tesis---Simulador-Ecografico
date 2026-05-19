@@ -15,12 +15,16 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
         // Power
         Power,
 
+        // Botón momentáneo
+        Probe,
+
         // Grupo exclusivo de parámetros
         Gain,
         DynamicRange,
         Depth,
         Zoom,
-        Frequency
+        Frequency,
+        Focus
     }
 
     [Header("Referencias automáticas")]
@@ -189,6 +193,11 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
             holdGreenMode = HoldGreenMode.Power;
             turnBlackWhenPowerOff = false;
         }
+        else if (fullName.Contains("probe"))
+        {
+            holdGreenMode = HoldGreenMode.Probe;
+            turnBlackWhenPowerOff = true;
+        }
         else if (fullName.Contains("freeze"))
         {
             holdGreenMode = HoldGreenMode.Freeze;
@@ -204,9 +213,14 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
             holdGreenMode = HoldGreenMode.Gain;
             turnBlackWhenPowerOff = true;
         }
-        else if (fullName.Contains("frequency") || fullName.Contains("frecuencia") || fullName.Contains("freq"))
+        else if (fullName.Contains("freq"))
         {
             holdGreenMode = HoldGreenMode.Frequency;
+            turnBlackWhenPowerOff = true;
+        }
+        else if (fullName.Contains("focus"))
+        {
+            holdGreenMode = HoldGreenMode.Focus;
             turnBlackWhenPowerOff = true;
         }
         else if (fullName.Contains("dr"))
@@ -304,6 +318,9 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
         if (holdGreenMode == HoldGreenMode.Power)
             return SlicingPlane.IsPowerOn;
 
+        if (holdGreenMode == HoldGreenMode.Probe)
+            return false;
+
         if (holdGreenMode == HoldGreenMode.Gain)
             return SlicingPlane.IsGainSelected;
 
@@ -318,6 +335,9 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
 
         if (holdGreenMode == HoldGreenMode.Frequency)
             return SlicingPlane.IsFrequencySelected;
+
+        if (holdGreenMode == HoldGreenMode.Focus)
+            return SlicingPlane.IsFocusSelected;
 
         return false;
     }
