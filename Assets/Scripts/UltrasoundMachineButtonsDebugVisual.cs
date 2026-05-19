@@ -203,7 +203,7 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
             holdGreenMode = HoldGreenMode.Gain;
             turnBlackWhenPowerOff = true;
         }
-        else if (fullName.Contains("dynamicrange"))
+        else if (fullName.Contains("dr"))
         {
             holdGreenMode = HoldGreenMode.DynamicRange;
             turnBlackWhenPowerOff = true;
