@@ -1,0 +1,15 @@
+{
+    "datasetName": "0301_post_reg_mask",
+    "sourceFilePath": "",
+    "rawFileName": "volume_original.raw",
+    "dtype": "float32",
+    "arrayOrder": "Python shape = (dimZ, dimY, dimX)",
+    "unityIndexFormula": "index = x + y * dimX + z * (dimX * dimY)",
+    "dimX": 211,
+    "dimY": 232,
+    "dimZ": 153,
+    "scaleX": 105.7454605102539,
+    "scaleY": 116.26988983154297,
+    "scaleZ": 76.20020294189453,
+    "volumeScale": 0.0
+}

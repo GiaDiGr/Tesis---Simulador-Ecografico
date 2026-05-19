@@ -1,0 +1,62 @@
+{
+    "datasetName": "0301_spherical_rectified_cropped_filled_matched_uint16",
+    "rawFileName": "volume_spherical_rectified_cropped_filled_matched_uint16.raw",
+    "dtype": "uint16",
+    "arrayOrder": "Python shape = (dimR, dimThetaY, dimThetaX)",
+    "unityIndexFormula": "index = thetaX + thetaY * dimThetaX + r * (dimThetaX * dimThetaY)",
+    "dimX": 199,
+    "dimY": 208,
+    "dimZ": 147,
+    "axis0": "r",
+    "axis1": "theta_y",
+    "axis2": "theta_x",
+    "originalDimX": 211,
+    "originalDimY": 232,
+    "originalDimZ": 153,
+    "originalScaleX": 105.7454605102539,
+    "originalScaleY": 116.26988983154297,
+    "originalScaleZ": 76.20020294189453,
+    "originalSpacingZ": 0.5013171246177272,
+    "originalSpacingY": 0.5033328564136059,
+    "originalSpacingX": 0.50354981195359,
+    "volumeScale": 0.0,
+    "method": "unity_uint16_export_histogram_matched_to_original_volume",
+    "description": "Volumen rectificado esférico exportado como uint16 para Unity. La distribución de intensidades del volumen rectificado fue igualada a la distribución del volumen original que ya se visualizaba correctamente.",
+    "apexZYX_index": {
+        "z0": -107.46043395996094,
+        "y0": 115.5,
+        "x0": 109.39306640625
+    },
+    "effectiveSphericalBoundsAfterCrop": {
+        "rInner": 67.37755584716797,
+        "rOuter": 128.7256622314453,
+        "thetaYMin": -0.40646839141845703,
+        "thetaYMax": 0.40646839141845703,
+        "thetaXMin": -0.4332320988178253,
+        "thetaXMax": 0.39510586857795715
+    },
+    "histogramMatching": {
+        "sourceLowPercentile": 0.5,
+        "sourceHighPercentile": 99.8,
+        "referenceLowPercentile": 0.5,
+        "referenceHighPercentile": 99.8,
+        "sourceLowValue": 4.891794681549072,
+        "sourceHighValue": 197.6106414794922,
+        "referenceLowValue": 2.0,
+        "referenceHighValue": 197.0,
+        "uint16Min": 0,
+        "uint16Max": 65535,
+        "uint16ValidP50": 13456.0,
+        "uint16ValidP90": 37841.0,
+        "uint16ValidP99": 56080.0,
+        "uint16ValidP999": 65535.0
+    },
+    "unityRawImport": {
+        "xDimension": 199,
+        "yDimension": 208,
+        "zDimension": 147,
+        "bytesToSkip": 0,
+        "dataFormat": "Uint 16",
+        "endianness": "Little endian"
+    }
+}

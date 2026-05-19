@@ -1,0 +1,69 @@
+{
+    "datasetName": "0301_spherical_rectified_cropped_filled",
+    "rawFileName": "volume_spherical_rectified_cropped_filled.raw",
+    "dtype": "float32",
+    "arrayOrder": "Python shape = (dimR, dimThetaY, dimThetaX)",
+    "unityIndexFormula": "index = thetaX + thetaY * dimThetaX + r * (dimThetaX * dimThetaY)",
+    "dimX": 199,
+    "dimY": 208,
+    "dimZ": 147,
+    "axis0": "r",
+    "axis1": "theta_y",
+    "axis2": "theta_x",
+    "originalDimX": 211,
+    "originalDimY": 232,
+    "originalDimZ": 153,
+    "originalScaleX": 105.7454605102539,
+    "originalScaleY": 116.26988983154297,
+    "originalScaleZ": 76.20020294189453,
+    "originalSpacingZ": 0.5013171246177272,
+    "originalSpacingY": 0.5033328564136059,
+    "originalSpacingX": 0.50354981195359,
+    "volumeScale": 0.0,
+    "method": "single_3d_spherical_sector_rectification_with_crop_and_nearest_hole_fill",
+    "description": "Se estima un apex 3D y se rectifica el volumen como un sector esférico en coordenadas r, theta_y, theta_x. Luego se recortan bordes fijos y se rellenan pequeñas zonas sin soporte usando el vóxel válido más cercano.",
+    "apexZYX_index": {
+        "z0": -107.46043395996094,
+        "y0": 115.5,
+        "x0": 109.39306640625
+    },
+    "originalSphericalBoundsBeforeCrop": {
+        "rInner": 66.11698150634766,
+        "rOuter": 129.98623657226562,
+        "thetaYMin": -0.4535951614379883,
+        "thetaYMax": 0.4535951614379883,
+        "thetaXMin": -0.45833325386047363,
+        "thetaXMax": 0.42020702362060547
+    },
+    "effectiveSphericalBoundsAfterCrop": {
+        "rInner": 67.37755584716797,
+        "rOuter": 128.7256622314453,
+        "thetaYMin": -0.40646839141845703,
+        "thetaYMax": 0.40646839141845703,
+        "thetaXMin": -0.4332320988178253,
+        "thetaXMax": 0.39510586857795715
+    },
+    "crop": {
+        "cropR_each_side": 3,
+        "cropThetaY_each_side": 12,
+        "cropThetaX_each_side": 6
+    },
+    "parameters": {
+        "emptyThreshold": 1.0,
+        "interpolationOrder": 1,
+        "maskCloseIterations": 1,
+        "fillInternalMaskHoles": true,
+        "minValidPixelsInPlane": 150,
+        "minValidColumns": 8,
+        "curveSmoothSigma": 2.0,
+        "rInnerPercentile": 0.2,
+        "rOuterPercentile": 99.8,
+        "angleMinPercentile": 0.5,
+        "angleMaxPercentile": 99.5,
+        "cutOutsideOriginalMask": false,
+        "radialChunkSize": 12,
+        "fillHolesAfterCrop": true,
+        "smoothFilledHoles": true,
+        "filledHolesSmoothSigma": 0.6
+    }
+}

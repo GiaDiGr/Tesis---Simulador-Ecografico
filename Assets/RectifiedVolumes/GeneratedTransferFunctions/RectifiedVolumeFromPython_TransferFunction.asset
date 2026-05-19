@@ -1,0 +1,34 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 33f90861ddebbc14486139d1bbdf1c77, type: 3}
+  m_Name: RectifiedVolumeFromPython_TransferFunction
+  m_EditorClassIdentifier: Assembly-CSharp::UnityVolumeRendering.TransferFunction
+  colourControlPoints:
+  - dataValue: 0
+    colourValue: {r: 0.11, g: 0.14, b: 0.13, a: 1}
+  - dataValue: 0.2415
+    colourValue: {r: 0.469, g: 0.354, b: 0.223, a: 1}
+  - dataValue: 0.3253
+    colourValue: {r: 1, g: 1, b: 1, a: 1}
+  alphaControlPoints:
+  - dataValue: 0
+    alphaValue: 0
+  - dataValue: 0.1787
+    alphaValue: 0
+  - dataValue: 0.2
+    alphaValue: 0.024
+  - dataValue: 0.28
+    alphaValue: 0.03
+  - dataValue: 0.4
+    alphaValue: 0.546
+  - dataValue: 0.547
+    alphaValue: 0.5266
