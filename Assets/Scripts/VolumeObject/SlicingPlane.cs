@@ -2336,6 +2336,121 @@ namespace UnityVolumeRendering
             Debug.Log("Centro de zoom establecido: " + zoomCenter);
         }
 
+        public void SetTGC0(float value)
+        {
+            SetTGCValue(0, value);
+        }
+
+        public void SetTGC1(float value)
+        {
+            SetTGCValue(1, value);
+        }
+
+        public void SetTGC2(float value)
+        {
+            SetTGCValue(2, value);
+        }
+
+        public void SetTGC3(float value)
+        {
+            SetTGCValue(3, value);
+        }
+
+        public void SetTGC4(float value)
+        {
+            SetTGCValue(4, value);
+        }
+
+        public void SetTGC5(float value)
+        {
+            SetTGCValue(5, value);
+        }
+
+        public void SetTGCEnabled(bool enabled)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetTGCEnabled(enabled);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set TGC Enabled"))
+                return;
+
+            tgcEnabled = enabled;
+            ApplyUltrasoundParameters();
+
+            Debug.Log("TGC Enabled: " + tgcEnabled);
+        }
+
+        public void SetAttenuationStrength(float value)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetAttenuationStrength(value);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set Attenuation Strength"))
+                return;
+
+            attenuationStrength = Mathf.Clamp(value, 0.0f, 3.0f);
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Attenuation Strength: " + attenuationStrength);
+        }
+
+        private void SetTGCValue(int index, float value)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetTGCValue(index, value);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set TGC"))
+                return;
+
+            value = Mathf.Clamp(value, minTGC, maxTGC);
+
+            switch (index)
+            {
+                case 0:
+                    tgc0 = value;
+                    break;
+
+                case 1:
+                    tgc1 = value;
+                    break;
+
+                case 2:
+                    tgc2 = value;
+                    break;
+
+                case 3:
+                    tgc3 = value;
+                    break;
+
+                case 4:
+                    tgc4 = value;
+                    break;
+
+                case 5:
+                    tgc5 = value;
+                    break;
+            }
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("TGC" + index + ": " + value);
+        }
+
         public void SetShowZoomMinimap(bool show)
         {
             SlicingPlane target = GetControlTarget();
