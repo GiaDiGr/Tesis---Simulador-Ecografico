@@ -10,6 +10,16 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
         _PowerOn ("Power On", Float) = 1.0
 
         _Gain ("Gain", Float) = 1.0
+        _FrequencyMHz ("Frequency MHz", Float) = 5.0
+
+        _TGCEnabled ("TGC Enabled", Float) = 1.0
+        _TGC0 ("TGC 0 Superficial", Float) = 1.0
+        _TGC1 ("TGC 1", Float) = 1.0
+        _TGC2 ("TGC 2", Float) = 1.0
+        _TGC3 ("TGC 3", Float) = 1.0
+        _TGC4 ("TGC 4", Float) = 1.0
+        _TGC5 ("TGC 5 Deep", Float) = 1.0
+
         _DynamicRange ("Dynamic Range", Float) = 60.0
         _ReferenceDynamicRange ("Reference Dynamic Range", Float) = 60.0
         _ContrastFromDynamicRange ("Contrast From Dynamic Range", Float) = 1.0
@@ -41,6 +51,23 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
 
             #include "UnityCG.cginc"
 
+            // Atenuación
+            #define TISSUE_ATTENUATION_DB_CM_MHZ 0.5f
+            #define IMAGING_DEPTH_CM 10.0f
+            #define ATTENUATION_VISUAL_SCALE 0.30f
+
+            // Resolución física
+            #define SOUND_SPEED_CM_PER_US 0.154f
+            #define IMAGE_WIDTH_CM 8.0f
+            #define IMAGE_WIDTH_PX 512.0f
+            #define IMAGE_HEIGHT_PX 512.0f
+            #define APERTURE_DIAMETER_CM 2.5f
+            #define PULSE_CYCLES_N 2.0f
+            #define K_AXIAL 1.0f
+            #define K_LATERAL 1.0f
+            #define MAX_SIGMA_AXIAL_PX 8.0f
+            #define MAX_SIGMA_LATERAL_PX 12.0f
+
             struct appdata
             {
                 float4 vertex : POSITION;
@@ -59,6 +86,16 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
             float _PowerOn;
 
             float _Gain;
+            float _FrequencyMHz;
+
+            float _TGCEnabled;
+            float _TGC0;
+            float _TGC1;
+            float _TGC2;
+            float _TGC3;
+            float _TGC4;
+            float _TGC5;
+
             float _DynamicRange;
             float _ReferenceDynamicRange;
             float _ContrastFromDynamicRange;
@@ -78,10 +115,8 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
             v2f vert(appdata v)
             {
                 v2f o;
-
                 o.vertex = UnityObjectToClipPos(v.vertex);
                 o.uv = v.uv;
-
                 return o;
             }
 
@@ -89,7 +124,6 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
             {
                 float safeZoom = max(_Zoom, 1.0f);
                 float2 center = saturate(_ZoomCenter.xy);
-
                 return center + (uv - center) / safeZoom;
             }
 
@@ -154,6 +188,123 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                 return nearLeft || nearRight || nearBottom || nearTop;
             }
 
+            float GetTGCGain(float depth01)
+            {
+                depth01 = saturate(depth01);
+
+                if (_TGCEnabled < 0.5f)
+                    return 1.0f;
+
+                float x = depth01 * 5.0f;
+
+                if (x < 1.0f)
+                    return lerp(_TGC0, _TGC1, x);
+
+                if (x < 2.0f)
+                    return lerp(_TGC1, _TGC2, x - 1.0f);
+
+                if (x < 3.0f)
+                    return lerp(_TGC2, _TGC3, x - 2.0f);
+
+                if (x < 4.0f)
+                    return lerp(_TGC3, _TGC4, x - 3.0f);
+
+                return lerp(_TGC4, _TGC5, x - 4.0f);
+            }
+
+            float GetFrequencyAttenuation(float depth01)
+            {
+                depth01 = saturate(depth01);
+
+                float safeFrequencyMHz = max(_FrequencyMHz, 0.01f);
+                float depthCm = depth01 * IMAGING_DEPTH_CM;
+
+                float attenuationDb =
+                    2.0f *
+                    TISSUE_ATTENUATION_DB_CM_MHZ *
+                    safeFrequencyMHz *
+                    depthCm *
+                    ATTENUATION_VISUAL_SCALE;
+
+                float attenuationGain = pow(10.0f, -attenuationDb / 20.0f);
+
+                return saturate(attenuationGain);
+            }
+
+            float Hash21(float2 p)
+            {
+                return frac(sin(dot(p, float2(127.1f, 311.7f))) * 43758.5453f);
+            }
+
+            float SignedNoise(float2 p)
+            {
+                return Hash21(p) * 2.0f - 1.0f;
+            }
+
+            float GetWavelengthCm()
+            {
+                float safeFrequencyMHz = max(_FrequencyMHz, 0.01f);
+                return SOUND_SPEED_CM_PER_US / safeFrequencyMHz;
+            }
+
+            float GetSigmaAxialPx()
+            {
+                float wavelengthCm = GetWavelengthCm();
+                float deltaZCm = IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX;
+
+                float sigmaAxialPx =
+                    K_AXIAL *
+                    PULSE_CYCLES_N *
+                    wavelengthCm /
+                    (2.0f * deltaZCm);
+
+                return clamp(sigmaAxialPx, 0.0f, MAX_SIGMA_AXIAL_PX);
+            }
+
+            float GetSigmaLateralPx(float depth01)
+            {
+                depth01 = saturate(depth01);
+
+                float wavelengthCm = GetWavelengthCm();
+
+                float depthCm = max(
+                    depth01 * IMAGING_DEPTH_CM,
+                    IMAGING_DEPTH_CM / IMAGE_HEIGHT_PX
+                );
+
+                float deltaXCm = IMAGE_WIDTH_CM / IMAGE_WIDTH_PX;
+
+                float sigmaLateralPx =
+                    K_LATERAL *
+                    1.4f *
+                    wavelengthCm *
+                    depthCm /
+                    (APERTURE_DIAMETER_CM * deltaXCm);
+
+                return clamp(sigmaLateralPx, 0.0f, MAX_SIGMA_LATERAL_PX);
+            }
+
+            float2 GetPhysicalResolutionJitterUV(float2 uv, float depth01)
+            {
+                float sigmaAxialPx = GetSigmaAxialPx();
+                float sigmaLateralPx = GetSigmaLateralPx(depth01);
+
+                float axialNoise = SignedNoise(
+                    uv * float2(173.0f, 251.0f) +
+                    float2(_FrequencyMHz * 7.13f, depth01 * 31.0f)
+                );
+
+                float lateralNoise = SignedNoise(
+                    uv * float2(241.0f, 139.0f) +
+                    float2(_FrequencyMHz * 11.71f, depth01 * 17.0f)
+                );
+
+                float axialUV = axialNoise * sigmaAxialPx / IMAGE_HEIGHT_PX;
+                float lateralUV = lateralNoise * sigmaLateralPx / IMAGE_WIDTH_PX;
+
+                return float2(lateralUV, axialUV);
+            }
+
             fixed4 SampleLinearSliceAtUV(float2 uv)
             {
                 if (
@@ -175,10 +326,19 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                     return float4(0.0f, 0.0f, 0.0f, 1.0f);
                 }
 
+                float tgcDepth01 = saturate(depthCoord / max(_DepthVisible, 0.0001f));
+
+                float2 resolutionJitterUV = GetPhysicalResolutionJitterUV(
+                    uv,
+                    tgcDepth01
+                );
+
+                float2 sampleUV = saturate(uv + resolutionJitterUV);
+
                 float3 localPlanePoint = float3(
-                    0.5f - uv.x,
+                    0.5f - sampleUV.x,
                     0.0f,
-                    0.5f - uv.y
+                    0.5f - sampleUV.y
                 );
 
                 float3 worldPoint = mul(
@@ -204,20 +364,14 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                     return float4(0.0f, 0.0f, 0.0f, 1.0f);
                 }
 
-                float dataVal = tex3D(
-                    _DataTex,
-                    dataCoord
-                ).r;
+                float dataVal = tex3D(_DataTex, dataCoord).r;
 
                 float4 col = tex2D(
                     _TFTex,
                     float2(dataVal, 0.0f)
                 );
 
-                float signalValue = max(
-                    max(col.r, col.g),
-                    col.b
-                );
+                float signalValue = max(max(col.r, col.g), col.b);
 
                 if (signalValue <= 0.001f)
                 {
@@ -225,7 +379,15 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                 }
                 else
                 {
-                    col.rgb = saturate(col.rgb * _Gain);
+                    float frequencyAttenuation = GetFrequencyAttenuation(tgcDepth01);
+                    float tgcGain = GetTGCGain(tgcDepth01);
+
+                    col.rgb = saturate(
+                        col.rgb *
+                        frequencyAttenuation *
+                        tgcGain *
+                        _Gain
+                    );
 
                     col.rgb = saturate(
                         0.5f +
@@ -235,7 +397,6 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                 }
 
                 col.a = 1.0f;
-
                 return col;
             }
 
@@ -247,7 +408,6 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                 }
 
                 float2 originalUV = i.uv;
-
                 float2 zoomedUV = ApplyZoomToUV(originalUV);
 
                 fixed4 mainColor = SampleLinearSliceAtUV(zoomedUV);
@@ -264,7 +424,6 @@ Shader "VolumeRendering/LinearSliceRenderingShader"
                     );
 
                     fixed4 minimapColor = SampleLinearSliceAtUV(minimapUV);
-
                     minimapColor.rgb *= 0.65f;
 
                     if (IsZoomBoxBorder(minimapUV))

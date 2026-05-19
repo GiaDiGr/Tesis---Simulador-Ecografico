@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using UnityEngine;
 using UnityEngine.XR;
+using UnityEngine.UI;
 
 namespace UnityVolumeRendering
 {
@@ -18,7 +19,8 @@ namespace UnityVolumeRendering
             Gain,
             DynamicRange,
             Depth,
-            Zoom
+            Zoom,
+            Frequency
         }
 
         [Serializable]
@@ -51,6 +53,24 @@ namespace UnityVolumeRendering
         [Header("Pantalla compartida entre transductores")]
         [SerializeField] private bool useSharedScreenPriority = true;
         [SerializeField] private bool defaultScreenSource = false;
+
+        [Header("UI Sliders integrados")]
+        [SerializeField] private bool manageUISlidersFromThisSlicingPlane = false;
+
+        [Tooltip("Objeto padre que contiene todos los sliders del ecógrafo.")]
+        [SerializeField] private Transform slidersRoot;
+
+        [SerializeField] private bool autoFindPowerControlledSliders = true;
+
+        [Tooltip("Sliders que se bloquean cuando el ecógrafo está apagado. Incluye TGC y slider general.")]
+        [SerializeField] private Slider[] powerControlledSliders;
+
+        [Tooltip("Slider único que controla el parámetro actualmente seleccionado: Gain, DR, Depth, Zoom o Frequency.")]
+        [SerializeField] private Slider selectedParameterSlider;
+
+        [SerializeField] private bool disableSelectedSliderWhenNoParameterSelected = true;
+
+        private bool suppressSelectedParameterSliderCallback;
 
         private static SlicingPlane activeScreenSource;
 
@@ -105,6 +125,11 @@ namespace UnityVolumeRendering
         public static bool IsZoomSelected
         {
             get { return IsSelectedParameter(SelectedUltrasoundParameter.Zoom); }
+        }
+
+        public static bool IsFrequencySelected
+        {
+            get { return IsSelectedParameter(SelectedUltrasoundParameter.Frequency); }
         }
 
         private static bool IsSelectedParameter(SelectedUltrasoundParameter parameter)
@@ -167,6 +192,25 @@ namespace UnityVolumeRendering
         [SerializeField] private float gainStep = 0.1f;
         [SerializeField] private float minGain = 0.5f;
         [SerializeField] private float maxGain = 2.0f;
+
+        [Header("Atenuación y TGC")]
+        [SerializeField] private bool tgcEnabled = true;
+
+        [SerializeField] private float tgc0 = 0.8f;
+        [SerializeField] private float tgc1 = 0.9f;
+        [SerializeField] private float tgc2 = 1.0f;
+        [SerializeField] private float tgc3 = 1.15f;
+        [SerializeField] private float tgc4 = 1.35f;
+        [SerializeField] private float tgc5 = 1.6f;
+
+        [SerializeField] private float minTGC = 0.1f;
+        [SerializeField] private float maxTGC = 3.0f;
+
+        [Header("Frecuencia ecográfica")]
+        [SerializeField] private float frequencyMHz = 5.0f;
+        [SerializeField] private float frequencyStepMHz = 1.0f;
+        [SerializeField] private float minFrequencyMHz = 2.0f;
+        [SerializeField] private float maxFrequencyMHz = 15.0f;
 
         [Header("Rango dinámico / Contraste")]
         [SerializeField] private float dynamicRange = 60.0f;
@@ -255,6 +299,17 @@ namespace UnityVolumeRendering
         private static readonly int PropTFTex = Shader.PropertyToID("_TFTex");
 
         private static readonly int PropGain = Shader.PropertyToID("_Gain");
+
+        private static readonly int PropFrequencyMHz = Shader.PropertyToID("_FrequencyMHz");
+
+        private static readonly int PropTGCEnabled = Shader.PropertyToID("_TGCEnabled");
+        private static readonly int PropTGC0 = Shader.PropertyToID("_TGC0");
+        private static readonly int PropTGC1 = Shader.PropertyToID("_TGC1");
+        private static readonly int PropTGC2 = Shader.PropertyToID("_TGC2");
+        private static readonly int PropTGC3 = Shader.PropertyToID("_TGC3");
+        private static readonly int PropTGC4 = Shader.PropertyToID("_TGC4");
+        private static readonly int PropTGC5 = Shader.PropertyToID("_TGC5");
+
         private static readonly int PropDynamicRange = Shader.PropertyToID("_DynamicRange");
         private static readonly int PropReferenceDynamicRange = Shader.PropertyToID("_ReferenceDynamicRange");
         private static readonly int PropContrastFromDynamicRange = Shader.PropertyToID("_ContrastFromDynamicRange");
@@ -302,6 +357,9 @@ namespace UnityVolumeRendering
 
             if (defaultScreenSource || activeScreenSource == null)
                 SelectAsScreenSource();
+
+            InitializeIntegratedSliders();
+            UpdateIntegratedSliders();
         }
 
         private void Start()
@@ -317,6 +375,9 @@ namespace UnityVolumeRendering
 
                 ApplyAutoButtonsPowerState();
             }
+
+            InitializeIntegratedSliders();
+            UpdateIntegratedSliders();
         }
 
         private void OnValidate()
@@ -344,6 +405,8 @@ namespace UnityVolumeRendering
             UpdateTrackballJoystick();
 
             UpdateAutoButtonsPowerStateIfNeeded();
+
+            UpdateIntegratedSliders();
         }
 
         private void RefreshAll()
@@ -500,6 +563,16 @@ namespace UnityVolumeRendering
         private void ClampParameters()
         {
             gain = Mathf.Clamp(gain, minGain, maxGain);
+
+            frequencyMHz = Mathf.Clamp(frequencyMHz, minFrequencyMHz, maxFrequencyMHz);
+
+            tgc0 = Mathf.Clamp(tgc0, minTGC, maxTGC);
+            tgc1 = Mathf.Clamp(tgc1, minTGC, maxTGC);
+            tgc2 = Mathf.Clamp(tgc2, minTGC, maxTGC);
+            tgc3 = Mathf.Clamp(tgc3, minTGC, maxTGC);
+            tgc4 = Mathf.Clamp(tgc4, minTGC, maxTGC);
+            tgc5 = Mathf.Clamp(tgc5, minTGC, maxTGC);
+
             dynamicRange = Mathf.Clamp(dynamicRange, minDynamicRange, maxDynamicRange);
             depthVisible = Mathf.Clamp(depthVisible, minDepthVisible, maxDepthVisible);
             zoom = Mathf.Clamp(zoom, minZoom, maxZoom);
@@ -2053,6 +2126,10 @@ namespace UnityVolumeRendering
             {
                 IncreaseZoom();
             }
+            else if (selectedParameter == SelectedUltrasoundParameter.Frequency)
+            {
+                IncreaseFrequency();
+            }
         }
 
         public void DecreaseSelectedParameter()
@@ -2086,6 +2163,10 @@ namespace UnityVolumeRendering
             else if (selectedParameter == SelectedUltrasoundParameter.Zoom)
             {
                 DecreaseZoom();
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.Frequency)
+            {
+                DecreaseFrequency();
             }
         }
 
@@ -2125,6 +2206,115 @@ namespace UnityVolumeRendering
             Debug.Log("Ganancia disminuida: " + gain);
         }
 
+        public bool TryGetSelectedParameterSliderRange(
+    out float minValue,
+    out float maxValue,
+    out float currentValue
+)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                return target.TryGetSelectedParameterSliderRange(
+                    out minValue,
+                    out maxValue,
+                    out currentValue
+                );
+            }
+
+            minValue = 0.0f;
+            maxValue = 1.0f;
+            currentValue = 0.0f;
+
+            if (selectedParameter == SelectedUltrasoundParameter.Gain)
+            {
+                minValue = minGain;
+                maxValue = maxGain;
+                currentValue = gain;
+                return true;
+            }
+
+            if (selectedParameter == SelectedUltrasoundParameter.DynamicRange)
+            {
+                minValue = minDynamicRange;
+                maxValue = maxDynamicRange;
+                currentValue = dynamicRange;
+                return true;
+            }
+
+            if (selectedParameter == SelectedUltrasoundParameter.Depth)
+            {
+                minValue = minDepthVisible;
+                maxValue = maxDepthVisible;
+                currentValue = depthVisible;
+                return true;
+            }
+
+            if (selectedParameter == SelectedUltrasoundParameter.Zoom)
+            {
+                minValue = minZoom;
+                maxValue = maxZoom;
+                currentValue = zoom;
+                return true;
+            }
+
+            if (selectedParameter == SelectedUltrasoundParameter.Frequency)
+            {
+                minValue = minFrequencyMHz;
+                maxValue = maxFrequencyMHz;
+                currentValue = frequencyMHz;
+                return true;
+            }
+
+            return false;
+        }
+
+        public void SetSelectedParameterFromSlider(float value)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetSelectedParameterFromSlider(value);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Slider de parámetro seleccionado"))
+                return;
+
+            if (selectedParameter == SelectedUltrasoundParameter.Gain)
+            {
+                gain = Mathf.Clamp(value, minGain, maxGain);
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.DynamicRange)
+            {
+                dynamicRange = Mathf.Clamp(value, minDynamicRange, maxDynamicRange);
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.Depth)
+            {
+                depthVisible = Mathf.Clamp(value, minDepthVisible, maxDepthVisible);
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.Zoom)
+            {
+                zoom = Mathf.Clamp(value, minZoom, maxZoom);
+                zoomCenter = ClampZoomCenterToVisibleArea(zoomCenter);
+
+                if (zoom <= 1.0001f)
+                    zoomPanModeActive = false;
+            }
+            else if (selectedParameter == SelectedUltrasoundParameter.Frequency)
+            {
+                frequencyMHz = Mathf.Clamp(value, minFrequencyMHz, maxFrequencyMHz);
+            }
+            else
+            {
+                return;
+            }
+
+            ApplyUltrasoundParameters();
+        }
+
         public void SetGain(float newGain)
         {
             SlicingPlane target = GetControlTarget();
@@ -2141,6 +2331,191 @@ namespace UnityVolumeRendering
             gain = Mathf.Clamp(newGain, minGain, maxGain);
             ApplyUltrasoundParameters();
             Debug.Log("Ganancia establecida: " + gain);
+        }
+
+        public void SelectFrequency()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SelectFrequency();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Frequency"))
+                return;
+
+            selectedParameter = SelectedUltrasoundParameter.Frequency;
+            Debug.Log("Parámetro seleccionado: Frecuencia");
+        }
+
+        public void IncreaseFrequency()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.IncreaseFrequency();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Frequency +"))
+                return;
+
+            frequencyMHz = Mathf.Clamp(
+                frequencyMHz + frequencyStepMHz,
+                minFrequencyMHz,
+                maxFrequencyMHz
+            );
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Frecuencia aumentada: " + frequencyMHz + " MHz");
+        }
+
+        public void DecreaseFrequency()
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.DecreaseFrequency();
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Frequency -"))
+                return;
+
+            frequencyMHz = Mathf.Clamp(
+                frequencyMHz - frequencyStepMHz,
+                minFrequencyMHz,
+                maxFrequencyMHz
+            );
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Frecuencia disminuida: " + frequencyMHz + " MHz");
+        }
+
+        public void SetFrequencyMHz(float newFrequencyMHz)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetFrequencyMHz(newFrequencyMHz);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set Frequency MHz"))
+                return;
+
+            frequencyMHz = Mathf.Clamp(
+                newFrequencyMHz,
+                minFrequencyMHz,
+                maxFrequencyMHz
+            );
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("Frecuencia establecida: " + frequencyMHz + " MHz");
+        }
+
+        public void SetTGC0(float value)
+        {
+            SetTGCValue(0, value);
+        }
+
+        public void SetTGC1(float value)
+        {
+            SetTGCValue(1, value);
+        }
+
+        public void SetTGC2(float value)
+        {
+            SetTGCValue(2, value);
+        }
+
+        public void SetTGC3(float value)
+        {
+            SetTGCValue(3, value);
+        }
+
+        public void SetTGC4(float value)
+        {
+            SetTGCValue(4, value);
+        }
+
+        public void SetTGC5(float value)
+        {
+            SetTGCValue(5, value);
+        }
+
+        public void SetTGCEnabled(bool enabled)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetTGCEnabled(enabled);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set TGC Enabled"))
+                return;
+
+            tgcEnabled = enabled;
+            ApplyUltrasoundParameters();
+
+            Debug.Log("TGC Enabled: " + tgcEnabled);
+        }
+
+        private void SetTGCValue(int index, float value)
+        {
+            SlicingPlane target = GetControlTarget();
+
+            if (target != this)
+            {
+                target.SetTGCValue(index, value);
+                return;
+            }
+
+            if (IgnoreButtonBecausePowerOff("Set TGC"))
+                return;
+
+            value = Mathf.Clamp(value, minTGC, maxTGC);
+
+            switch (index)
+            {
+                case 0:
+                    tgc0 = value;
+                    break;
+
+                case 1:
+                    tgc1 = value;
+                    break;
+
+                case 2:
+                    tgc2 = value;
+                    break;
+
+                case 3:
+                    tgc3 = value;
+                    break;
+
+                case 4:
+                    tgc4 = value;
+                    break;
+
+                case 5:
+                    tgc5 = value;
+                    break;
+            }
+
+            ApplyUltrasoundParameters();
+
+            Debug.Log("TGC" + index + ": " + value);
         }
 
         public void IncreaseDynamicRange()
@@ -2336,121 +2711,6 @@ namespace UnityVolumeRendering
             Debug.Log("Centro de zoom establecido: " + zoomCenter);
         }
 
-        public void SetTGC0(float value)
-        {
-            SetTGCValue(0, value);
-        }
-
-        public void SetTGC1(float value)
-        {
-            SetTGCValue(1, value);
-        }
-
-        public void SetTGC2(float value)
-        {
-            SetTGCValue(2, value);
-        }
-
-        public void SetTGC3(float value)
-        {
-            SetTGCValue(3, value);
-        }
-
-        public void SetTGC4(float value)
-        {
-            SetTGCValue(4, value);
-        }
-
-        public void SetTGC5(float value)
-        {
-            SetTGCValue(5, value);
-        }
-
-        public void SetTGCEnabled(bool enabled)
-        {
-            SlicingPlane target = GetControlTarget();
-
-            if (target != this)
-            {
-                target.SetTGCEnabled(enabled);
-                return;
-            }
-
-            if (IgnoreButtonBecausePowerOff("Set TGC Enabled"))
-                return;
-
-            tgcEnabled = enabled;
-            ApplyUltrasoundParameters();
-
-            Debug.Log("TGC Enabled: " + tgcEnabled);
-        }
-
-        public void SetAttenuationStrength(float value)
-        {
-            SlicingPlane target = GetControlTarget();
-
-            if (target != this)
-            {
-                target.SetAttenuationStrength(value);
-                return;
-            }
-
-            if (IgnoreButtonBecausePowerOff("Set Attenuation Strength"))
-                return;
-
-            attenuationStrength = Mathf.Clamp(value, 0.0f, 3.0f);
-            ApplyUltrasoundParameters();
-
-            Debug.Log("Attenuation Strength: " + attenuationStrength);
-        }
-
-        private void SetTGCValue(int index, float value)
-        {
-            SlicingPlane target = GetControlTarget();
-
-            if (target != this)
-            {
-                target.SetTGCValue(index, value);
-                return;
-            }
-
-            if (IgnoreButtonBecausePowerOff("Set TGC"))
-                return;
-
-            value = Mathf.Clamp(value, minTGC, maxTGC);
-
-            switch (index)
-            {
-                case 0:
-                    tgc0 = value;
-                    break;
-
-                case 1:
-                    tgc1 = value;
-                    break;
-
-                case 2:
-                    tgc2 = value;
-                    break;
-
-                case 3:
-                    tgc3 = value;
-                    break;
-
-                case 4:
-                    tgc4 = value;
-                    break;
-
-                case 5:
-                    tgc5 = value;
-                    break;
-            }
-
-            ApplyUltrasoundParameters();
-
-            Debug.Log("TGC" + index + ": " + value);
-        }
-
         public void SetShowZoomMinimap(bool show)
         {
             SlicingPlane target = GetControlTarget();
@@ -2565,6 +2825,30 @@ namespace UnityVolumeRendering
 
             if (mat.HasProperty(PropGain))
                 mat.SetFloat(PropGain, gain);
+
+            if (mat.HasProperty(PropFrequencyMHz))
+                mat.SetFloat(PropFrequencyMHz, frequencyMHz);
+
+            if (mat.HasProperty(PropTGCEnabled))
+                mat.SetFloat(PropTGCEnabled, tgcEnabled ? 1.0f : 0.0f);
+
+            if (mat.HasProperty(PropTGC0))
+                mat.SetFloat(PropTGC0, tgc0);
+
+            if (mat.HasProperty(PropTGC1))
+                mat.SetFloat(PropTGC1, tgc1);
+
+            if (mat.HasProperty(PropTGC2))
+                mat.SetFloat(PropTGC2, tgc2);
+
+            if (mat.HasProperty(PropTGC3))
+                mat.SetFloat(PropTGC3, tgc3);
+
+            if (mat.HasProperty(PropTGC4))
+                mat.SetFloat(PropTGC4, tgc4);
+
+            if (mat.HasProperty(PropTGC5))
+                mat.SetFloat(PropTGC5, tgc5);
 
             if (mat.HasProperty(PropDynamicRange))
                 mat.SetFloat(PropDynamicRange, dynamicRange);
@@ -2722,6 +3006,122 @@ namespace UnityVolumeRendering
 
                 type = type.BaseType;
             }
+        }
+
+        private void InitializeIntegratedSliders()
+        {
+            if (!manageUISlidersFromThisSlicingPlane)
+                return;
+
+            if (autoFindPowerControlledSliders && slidersRoot != null)
+                powerControlledSliders = slidersRoot.GetComponentsInChildren<Slider>(true);
+
+            SubscribeSelectedParameterSlider();
+        }
+
+        private void SubscribeSelectedParameterSlider()
+        {
+            if (selectedParameterSlider == null)
+                return;
+
+            selectedParameterSlider.onValueChanged.RemoveListener(HandleSelectedParameterSliderChanged);
+            selectedParameterSlider.onValueChanged.AddListener(HandleSelectedParameterSliderChanged);
+        }
+
+        private void UnsubscribeSelectedParameterSlider()
+        {
+            if (selectedParameterSlider == null)
+                return;
+
+            selectedParameterSlider.onValueChanged.RemoveListener(HandleSelectedParameterSliderChanged);
+        }
+
+        private void UpdateIntegratedSliders()
+        {
+            if (!manageUISlidersFromThisSlicingPlane)
+                return;
+
+            ApplyPowerStateToIntegratedSliders();
+            SyncSelectedParameterSlider();
+        }
+
+        private void ApplyPowerStateToIntegratedSliders()
+        {
+            if (powerControlledSliders == null)
+                return;
+
+            for (int i = 0; i < powerControlledSliders.Length; i++)
+            {
+                Slider slider = powerControlledSliders[i];
+
+                if (slider == null)
+                    continue;
+
+                slider.interactable = powerOn;
+            }
+        }
+
+        private void SyncSelectedParameterSlider()
+        {
+            if (selectedParameterSlider == null)
+                return;
+
+            SlicingPlane target = GetControlTarget();
+
+            if (target == null)
+            {
+                selectedParameterSlider.interactable = false;
+                return;
+            }
+
+            float minValue;
+            float maxValue;
+            float currentValue;
+
+            bool hasParameter = target.TryGetSelectedParameterSliderRange(
+                out minValue,
+                out maxValue,
+                out currentValue
+            );
+
+            bool canUse = powerOn && hasParameter;
+
+            if (disableSelectedSliderWhenNoParameterSelected)
+                selectedParameterSlider.interactable = canUse;
+            else
+                selectedParameterSlider.interactable = powerOn;
+
+            if (!hasParameter)
+                return;
+
+            suppressSelectedParameterSliderCallback = true;
+
+            selectedParameterSlider.minValue = minValue;
+            selectedParameterSlider.maxValue = maxValue;
+            selectedParameterSlider.SetValueWithoutNotify(currentValue);
+
+            suppressSelectedParameterSliderCallback = false;
+        }
+
+        private void HandleSelectedParameterSliderChanged(float value)
+        {
+            if (suppressSelectedParameterSliderCallback)
+                return;
+
+            if (!powerOn)
+                return;
+
+            SlicingPlane target = GetControlTarget();
+
+            if (target == null)
+                return;
+
+            target.SetSelectedParameterFromSlider(value);
+        }
+
+        private void OnDisable()
+        {
+            UnsubscribeSelectedParameterSlider();
         }
 
         private void OnDestroy()

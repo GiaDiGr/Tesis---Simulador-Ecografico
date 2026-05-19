@@ -19,7 +19,8 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
         Gain,
         DynamicRange,
         Depth,
-        Zoom
+        Zoom,
+        Frequency
     }
 
     [Header("Referencias automáticas")]
@@ -203,6 +204,11 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
             holdGreenMode = HoldGreenMode.Gain;
             turnBlackWhenPowerOff = true;
         }
+        else if (fullName.Contains("frequency") || fullName.Contains("frecuencia") || fullName.Contains("freq"))
+        {
+            holdGreenMode = HoldGreenMode.Frequency;
+            turnBlackWhenPowerOff = true;
+        }
         else if (fullName.Contains("dr"))
         {
             holdGreenMode = HoldGreenMode.DynamicRange;
@@ -309,6 +315,9 @@ public class UltrasoundMachineButtonsDebugVisual : MonoBehaviour
 
         if (holdGreenMode == HoldGreenMode.Zoom)
             return SlicingPlane.IsZoomSelected;
+
+        if (holdGreenMode == HoldGreenMode.Frequency)
+            return SlicingPlane.IsFrequencySelected;
 
         return false;
     }
